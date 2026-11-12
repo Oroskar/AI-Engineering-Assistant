@@ -1,0 +1,22 @@
+
+# Python virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# PyCharm settings
+.idea/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Generated analysis reports
+analysis_results.json
+
+# macOS
+.DS_Store
+**/pyvenv.cfg

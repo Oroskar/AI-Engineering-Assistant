@@ -1,0 +1,7 @@
+2026-11-12 09:00:00 INFO Server started
+2026-11-12 09:01:00 WARNING High memory usage
+2026-11-12 09:02:00 ERROR Database connection failed
+2026-11-12 09:03:00 INFO Retrying connection
+2026-11-12 09:04:00 ERROR Request timeout
+2026-11-12 09:05:00 ERROR Connection refused by PostgreSQL
+2026-11-12 09:06:00 INFO Previous ERROR was resolved

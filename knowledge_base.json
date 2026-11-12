@@ -1,0 +1,45 @@
+
+[
+  {
+    "id": "general_database_connection",
+    "title": "General SQL Database Connection Troubleshooting",
+    "keywords": [
+      "sql server",
+      "database",
+      "db server",
+      "cannot reach sql",
+      "connection to database"
+    ],
+    "content": "When an application cannot connect to a SQL database, first identify which database engine is being used. Check whether the database service is running, verify the hostname and port, and inspect network connectivity and firewall settings. Do not assume the database is PostgreSQL, MySQL, or Microsoft SQL Server unless the error or system configuration confirms it."
+  },
+  {
+    "id": "postgres_connection",
+    "title": "PostgreSQL Connection Troubleshooting",
+    "keywords": [
+      "postgresql",
+      "database",
+      "connection refused"
+    ],
+    "content": "For PostgreSQL connection failures, check whether the PostgreSQL server is running. Verify the hostname, port, and connection settings. Check firewall rules and PostgreSQL server logs."
+  },
+  {
+    "id": "request_timeout",
+    "title": "Request Timeout Troubleshooting",
+    "keywords": [
+      "timeout",
+      "timed out",
+      "slow request"
+    ],
+    "content": "Check server response times, network latency, and timeout settings. Investigate slow database queries or overloaded services when relevant."
+  },
+  {
+    "id": "memory_failure",
+    "title": "Memory Troubleshooting",
+    "keywords": [
+      "memory",
+      "out of memory",
+      "allocation failed"
+    ],
+    "content": "Check available RAM and GPU memory, application memory usage, and possible memory leaks. Identify processes consuming excessive memory."
+  }
+]
