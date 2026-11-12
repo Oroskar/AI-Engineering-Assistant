@@ -2,27 +2,12 @@
 import json
 from pathlib import Path
 
+from log_parser import parse_multiline_log
 from ai_classifier import classify_with_ai
 from rag_assistant import suggest_solution
 
 
 BASE_DIR = Path(__file__).parent
-
-
-def parse_log_line(line):
-    parts = line.strip().split(maxsplit=3)
-
-    if len(parts) != 4:
-        return None
-
-    date, time, level, message = parts
-
-    return {
-        "date": date,
-        "time": time,
-        "level": level,
-        "message": message
-    }
 
 
 def classify_error(message):
@@ -39,67 +24,81 @@ def classify_error(message):
 
 
 def analyze_logs(file_path):
+    records = parse_multiline_log(file_path)
+
     results = []
     categories = {}
 
-    with open(file_path, "r", encoding="utf-8") as file:
-        for line in file:
-            log = parse_log_line(line)
+    for log in records:
 
-            if log is None or log["level"] != "ERROR":
-                continue
+        if log["level"] != "ERROR":
+            continue
 
-            message = log["message"]
-            category = classify_error(message)
-            source = "RULE_BASED"
-            explanation = "Classified using predefined rules"
+        message = log["message"]
+        details = log["details"]
 
-            # Classify unknown errors using AI
-            if category == "UNKNOWN":
-                print("\nClassifying with AI...")
+        # Combine error message and stack trace
+        full_error = "\n".join([message] + details)
 
-                ai_result = classify_with_ai(message)
+        print("\n" + "=" * 50)
+        print("DETECTED ERROR:", message)
 
-                category = ai_result["category"]
-                explanation = ai_result["explanation"]
-                source = "AI"
+        if details:
+            print("Stack Trace detected!")
 
-            # Retrieve documentation and suggest solutions
-            print(f"\n[{category}] {message}")
-            print("Searching technical documentation...")
+        # Step 1: Classify the error
+        category = classify_error(message)
+        source = "RULE_BASED"
+        explanation = "Classified using predefined rules"
 
-            solution = suggest_solution(message)
+        if category == "UNKNOWN":
+            print("Classifying with AI...")
 
-            print("\nSuggested Solution:")
-            print(solution)
+            ai_result = classify_with_ai(full_error)
 
-            # Store the analysis
-            results.append({
-                "date": log["date"],
-                "time": log["time"],
-                "message": message,
-                "category": category,
-                "explanation": explanation,
-                "classification_source": source,
-                "suggested_solution": solution
-            })
+            category = ai_result["category"]
+            explanation = ai_result["explanation"]
+            source = "AI"
 
-            categories[category] = categories.get(category, 0) + 1
+        print("Category:", category)
 
-    # Save results to JSON
-    output_path = BASE_DIR / "analysis_results.json"
+        # Step 2: Retrieve documentation and generate advice
+        print("Searching technical documentation...")
 
-    with open(output_path, "w", encoding="utf-8") as output:
-        json.dump(results, output, indent=4, ensure_ascii=False)
+        solution = suggest_solution(full_error)
 
-    print("\n" + "=" * 40)
+        print("\nAI Suggested Solution:")
+        print(solution)
+
+        # Step 3: Save the result
+        results.append({
+            "date": log["date"],
+            "time": log["time"],
+            "message": message,
+            "stack_trace": details,
+            "category": category,
+            "explanation": explanation,
+            "classification_source": source,
+            "suggested_solution": solution
+        })
+
+        categories[category] = categories.get(category, 0) + 1
+
+    # Save complex-log results separately
+    output_path = BASE_DIR / "analysis_results_realistic.json"
+
+    with open(output_path, "w", encoding="utf-8") as file:
+        json.dump(results, file, indent=4, ensure_ascii=False)
+
+    print("\n" + "=" * 50)
     print("ANALYSIS SUMMARY")
-    print("=" * 40)
-
+    print("=" * 50)
+    print("Total log events:", len(records))
     print("Total errors:", len(results))
     print("Errors by category:", categories)
     print("Results saved to:", output_path)
 
 
 if __name__ == "__main__":
-    analyze_logs(BASE_DIR / "sample" / "sample.log")
+    log_path = BASE_DIR / "sample" / "realistic.log"
+    analyze_logs(log_path)

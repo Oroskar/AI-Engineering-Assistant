@@ -20,3 +20,7 @@ analysis_results.json
 # macOS
 .DS_Store
 **/pyvenv.cfg
+
+# Generated analysis and evaluation reports
+*results*.json
+/realistic.log

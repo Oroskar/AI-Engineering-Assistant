@@ -1,0 +1,14 @@
+2026-11-12 09:00:00 INFO Application started
+2026-11-12 09:01:15 ERROR Failed to connect to PostgreSQL
+Traceback (most recent call last):
+  File "db.py", line 42, in connect
+    connection = open_database()
+ConnectionRefusedError: [Errno 61] Connection refused
+2026-11-12 09:02:00 WARNING Retrying database connection
+2026-11-12 09:03:22 ERROR CUDA out of memory while running inference
+Traceback (most recent call last):
+  File "inference.py", line 88, in predict
+    output = model(inputs)
+RuntimeError: CUDA out of memory
+2026-11-12 09:04:00 INFO Request completed
+2026-11-12 09:05:00 ERROR Request timeout after 30 seconds

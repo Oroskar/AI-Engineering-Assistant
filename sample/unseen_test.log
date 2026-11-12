@@ -1,0 +1,8 @@
+2026-11-12 10:00:00 INFO Service started
+2026-11-12 10:01:15 ERROR Unable to resolve hostname api.internal
+socket.gaierror: Name or service not known
+2026-11-12 10:02:00 WARNING Retry scheduled
+2026-11-12 10:03:10 ERROR No space left on device while writing reports
+OSError: [Errno 28] No space left on device
+2026-11-12 10:04:00 INFO Healthcheck OK
+2026-11-12 10:05:00 ERROR Request timeout after 45 seconds waiting for upstream service
