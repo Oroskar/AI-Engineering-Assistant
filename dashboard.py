@@ -9,16 +9,15 @@ import streamlit as st
 
 from ai_classifier import classify_with_ai
 from evidence_aware import analyze_error
+from log_parser import ERROR_LEVELS, parse_log_text_with_stats
 
 
 BASE_DIR = Path(__file__).parent
 
-DEMO_REPORT = BASE_DIR / "analysis_results_realistic.json"
+DEMO_LOG = BASE_DIR / "sample" / "realistic.log"
 SAVED_ANALYSIS = BASE_DIR / "evidence_aware_results.json"
 
 MAX_UPLOAD_BYTES = 2 * 1024 * 1024
-
-ERROR_LEVELS = {"ERROR", "CRITICAL", "FATAL"}
 
 VALID_CATEGORIES = {
     "DATABASE",
@@ -28,16 +27,6 @@ VALID_CATEGORIES = {
     "STORAGE",
     "UNKNOWN"
 }
-
-LOG_PATTERN = re.compile(
-    r"^(?P<date>\d{4}-\d{2}-\d{2})[ T]"
-    r"(?P<time>\d{2}:\d{2}:\d{2})"
-    r"(?:[.,]\d{1,6})?"
-    r"(?:Z|[+-]\d{2}:?\d{2})?\s+"
-    r"\[?(?P<level>TRACE|DEBUG|INFO|WARN|WARNING|ERROR|CRITICAL|FATAL)\]?"
-    r"\s*(?:[-:]\s*)?(?P<message>.*)$",
-    re.IGNORECASE
-)
 
 
 st.set_page_config(
@@ -63,91 +52,43 @@ def load_json(path):
 def classify_with_rules(text):
     text = text.lower()
 
-    storage_terms = (
-        "no space left on device",
-        "no space left",
-        "disk full",
-        "disk is full",
-        "insufficient disk space",
-        "file system is full",
-        "filesystem full",
-        "storage exhausted",
-        "enospc"
-    )
-
-    if any(term in text for term in storage_terms):
+    if any(term in text for term in (
+        "no space left", "disk full",
+        "insufficient disk space", "filesystem full",
+        "file system is full", "enospc"
+    )):
         return "STORAGE"
 
-    memory_terms = (
-        "out of memory",
-        "memoryerror",
-        "cuda",
-        "memory allocation failed",
-        "memory allocation error"
-    )
-
-    if any(term in text for term in memory_terms):
+    if any(term in text for term in (
+        "out of memory", "memoryerror", "cuda",
+        "memory allocation failed"
+    )):
         return "MEMORY"
 
-    timeout_terms = (
-        "timeout",
-        "timed out",
-        "deadline exceeded"
-    )
-
-    if any(term in text for term in timeout_terms):
+    if any(term in text for term in (
+        "timeout", "timed out", "deadline exceeded"
+    )):
         return "TIMEOUT"
 
     if re.search(
-        r"\b(database|postgresql|postgres|"
-        r"mysql|mongodb|sqlite|sql)\b",
+        r"\b(database|postgresql|postgres|mysql|"
+        r"mongodb|sqlite|sql|redis)\b",
         text
     ):
         return "DATABASE"
 
-    network_terms = (
-        "dns",
-        "unable to resolve hostname",
+    if any(term in text for term in (
+        "dns", "unable to resolve hostname",
         "name or service not known",
-        "hostname not found",
-        "host not found",
-        "network unreachable",
-        "connection refused",
-        "connection reset"
-    )
-
-    if any(term in text for term in network_terms):
+        "hostname not found", "network unreachable",
+        "connection refused", "connection reset"
+    )):
         return "NETWORK"
 
     return "UNKNOWN"
 
 
-def parse_uploaded_text(text):
-    events = []
-    ignored_prefix_lines = 0
-
-    for raw_line in text.splitlines():
-        line = raw_line.rstrip()
-
-        if not line.strip():
-            continue
-
-        match = LOG_PATTERN.match(line)
-
-        if match:
-            record = match.groupdict()
-
-            record["level"] = record["level"].upper()
-            record["stack_trace"] = []
-
-            events.append(record)
-
-        elif events:
-            events[-1]["stack_trace"].append(line)
-
-        else:
-            ignored_prefix_lines += 1
-
+def build_error_records(events):
     errors = []
 
     for event in events:
@@ -155,8 +96,7 @@ def parse_uploaded_text(text):
             continue
 
         full_error = "\n".join(
-            [event["message"]]
-            + event["stack_trace"]
+            [event["message"]] + event["details"]
         )
 
         category = classify_with_rules(full_error)
@@ -166,7 +106,7 @@ def parse_uploaded_text(text):
             "time": event["time"],
             "level": event["level"],
             "message": event["message"],
-            "stack_trace": event["stack_trace"],
+            "stack_trace": list(event["details"]),
             "category": category,
             "classification_source": (
                 "RULE_BASED"
@@ -175,108 +115,135 @@ def parse_uploaded_text(text):
             )
         })
 
-    return {
-        "events": events,
-        "errors": errors,
-        "ignored_prefix_lines": ignored_prefix_lines
-    }
+    return errors
 
 
-def build_full_error(record):
-    details = record.get("stack_trace", [])
-
-    if not isinstance(details, list):
-        details = []
-
+def full_error_text(record):
     return "\n".join(
         [str(record["message"])]
-        + [str(line) for line in details]
+        + [
+            str(line)
+            for line in record.get("stack_trace", [])
+        ]
     )
 
 
-def analyze_selected_record(record):
-    updated_record = dict(record)
+def run_analysis(record):
+    updated = dict(record)
 
-    category = updated_record.get(
-        "category", "UNKNOWN"
-    )
-
-    classification_source = updated_record.get(
-        "classification_source", "UNKNOWN"
-    )
+    category = updated["category"]
+    source = updated["classification_source"]
 
     if category == "UNKNOWN":
         prediction = classify_with_ai(
-            build_full_error(updated_record)
+            full_error_text(updated)
         )
 
-        predicted_category = str(
+        predicted = str(
             prediction.get("category", "UNKNOWN")
         ).upper().strip()
 
-        if predicted_category in VALID_CATEGORIES:
-            category = predicted_category
+        if predicted in VALID_CATEGORIES:
+            category = predicted
 
-        updated_record["category"] = category
-        classification_source = "AI"
+        source = "AI"
 
-    updated_record[
-        "classification_source"
-    ] = classification_source
+    updated["category"] = category
+    updated["classification_source"] = source
 
-    result = analyze_error(updated_record)
+    result = analyze_error(updated)
 
     result["category"] = category
-    result["classification_source"] = classification_source
+    result["classification_source"] = source
 
     return result
 
 
-def show_log_explorer(records, analysis_cache):
-    with st.expander(
-        "Log Explorer - Detected Errors"
-    ):
-        rows = []
+def display_parser_health(parsed):
+    malformed = parsed.get(
+        "malformed_header_lines", 0
+    )
 
-        for index, record in enumerate(records):
-            cached = analysis_cache.get(index, {})
+    ignored = parsed.get(
+        "ignored_prefix_lines", 0
+    )
 
-            rows.append({
-                "ID": index + 1,
-                "Time": record.get("time", ""),
-                "Level": record.get("level", "ERROR"),
-                "Category": cached.get(
-                    "category",
-                    record.get("category", "UNKNOWN")
-                ),
-                "Message": record.get("message", "")
-            })
+    st.subheader("Parsing Quality")
 
-        st.dataframe(
-            rows,
-            use_container_width=True,
-            hide_index=True
+    columns = st.columns(3)
+
+    columns[0].metric(
+        "Parsed Events",
+        len(parsed["records"])
+    )
+
+    columns[1].metric(
+        "Malformed Headers",
+        malformed
+    )
+
+    columns[2].metric(
+        "Ignored Prefix Lines",
+        ignored
+    )
+
+    if malformed > 0:
+        st.warning(
+            f"Parsing warning: {malformed} malformed "
+            "log header(s) were skipped. "
+            "The analysis may be incomplete."
+        )
+
+    if ignored > 0:
+        st.warning(
+            f"{ignored} line(s) before the first valid "
+            "log event were ignored. This count can "
+            "include malformed headers."
+        )
+
+    if malformed == 0 and ignored == 0:
+        st.success(
+            "No malformed timestamp-like headers or "
+            "ignored prefix lines were detected."
+        )
+
+    with st.expander("About parsing quality"):
+        st.markdown(
+            "The parser recognizes supported timestamp "
+            "and log-level formats. Invalid timestamps "
+            "and malformed timestamp-like headers are "
+            "skipped rather than analyzed as errors."
+        )
+
+        st.caption(
+            "This does not guarantee that every line "
+            "was understood correctly. Unrecognized "
+            "continuation lines may still be attached "
+            "to the previous event."
         )
 
 
-def show_analysis(result):
-    left, right = st.columns(2, gap="large")
-
+def display_analysis(result):
     documentation = result.get(
         "documentation", {}
     )
 
-    ai_analysis = result.get(
+    ai = result.get(
         "ai_analysis", {}
     )
 
+    left, right = st.columns(2, gap="large")
+
     with left:
-        st.subheader("Documented Recommendations")
+        st.subheader(
+            "Documented Recommendations"
+        )
 
         source = documentation.get("source")
 
         st.caption(
-            f"Source: {source or 'No matching documentation'}"
+            "Source: "
+            + str(source or "No matching documentation")
         )
 
         recommendations = documentation.get(
@@ -296,33 +263,30 @@ def show_analysis(result):
             )
 
         st.caption(
-            "These quotes come from local sample "
-            "documentation. They are not independently "
-            "verified for technical accuracy."
+            "Quotes come from local sample documentation. "
+            "Technical correctness is not independently verified."
         )
 
     with right:
         st.subheader("AI Hypotheses")
 
         st.warning(
-            "Possible causes - not confirmed diagnoses."
+            "Possible causes, not confirmed diagnoses."
         )
 
-        hypotheses = ai_analysis.get(
-            "hypotheses", []
-        )
+        hypotheses = ai.get("hypotheses", [])
 
         if hypotheses:
             for hypothesis in hypotheses:
                 st.markdown(f"- {hypothesis}")
         else:
-            st.info("No hypotheses available.")
+            st.info("No hypotheses generated.")
 
         st.divider()
 
         st.subheader("Missing Information")
 
-        missing = ai_analysis.get(
+        missing = ai.get(
             "missing_information", []
         )
 
@@ -330,11 +294,15 @@ def show_analysis(result):
             for item in missing:
                 st.markdown(f"- {item}")
         else:
-            st.info("No missing information identified.")
+            st.info(
+                "No missing information identified."
+            )
 
 
 def main():
-    st.sidebar.title("AI Engineering Assistant")
+    st.sidebar.title(
+        "AI Engineering Assistant"
+    )
 
     data_source = st.sidebar.radio(
         "Data Source",
@@ -343,16 +311,17 @@ def main():
 
     st.sidebar.divider()
 
-    saved_results = []
-
     if data_source == "Demo Data":
-        records = load_json(DEMO_REPORT)
-        saved_results = load_json(SAVED_ANALYSIS)
+        if not DEMO_LOG.exists():
+            st.error("Demo log file is missing.")
+            st.stop()
 
-        source_key = "demo"
-        total_events = 6
+        file_bytes = DEMO_LOG.read_bytes()
+        filename = DEMO_LOG.name
 
-        st.info("Using synthetic demo logs.")
+        saved_results = load_json(
+            SAVED_ANALYSIS
+        )
 
     else:
         uploaded_file = st.sidebar.file_uploader(
@@ -361,129 +330,157 @@ def main():
         )
 
         st.sidebar.caption(
-            "Maximum file size: 2 MB."
+            "Maximum file size: 2 MB"
         )
 
         if uploaded_file is None:
             st.title("Upload Logs")
 
             st.info(
-                "Choose a .log or .txt file in the sidebar."
+                "Choose a .log or .txt file "
+                "in the sidebar."
             )
             st.stop()
 
         file_bytes = uploaded_file.getvalue()
+        filename = uploaded_file.name
 
-        if len(file_bytes) > MAX_UPLOAD_BYTES:
-            st.error("File exceeds the 2 MB limit.")
-            st.stop()
+        saved_results = []
 
-        try:
-            text = file_bytes.decode("utf-8-sig")
-        except UnicodeDecodeError:
-            st.error("The file must be UTF-8 encoded.")
-            st.stop()
+    if len(file_bytes) > MAX_UPLOAD_BYTES:
+        st.error("File exceeds the 2 MB limit.")
+        st.stop()
 
-        parsed = parse_uploaded_text(text)
+    try:
+        text = file_bytes.decode("utf-8-sig")
 
-        records = parsed["errors"]
-        total_events = len(parsed["events"])
-
-        source_key = (
-            "upload:"
-            + hashlib.sha256(file_bytes).hexdigest()
+    except UnicodeDecodeError:
+        st.error(
+            "Only UTF-8 encoded logs are supported."
         )
+        st.stop()
 
-        st.success(
-            f"Loaded file: {uploaded_file.name}"
-        )
+    parsed = parse_log_text_with_stats(text)
 
-        if parsed["ignored_prefix_lines"]:
-            st.warning(
-                "Some lines before the first recognized "
-                "log event were ignored."
-            )
+    events = parsed["records"]
+    records = build_error_records(events)
 
-        if total_events == 0:
-            st.error(
-                "No recognized log events were found."
-            )
-            st.stop()
+    source_key = (
+        data_source + ":"
+        + hashlib.sha256(file_bytes).hexdigest()
+    )
 
-    if st.session_state.get("active_source") != source_key:
+    if (
+        st.session_state.get("active_source")
+        != source_key
+    ):
         st.session_state["active_source"] = source_key
         st.session_state["analysis_cache"] = {}
 
-    analysis_cache = st.session_state["analysis_cache"]
+    cache = st.session_state["analysis_cache"]
 
-    def effective_category(index, record):
-        return analysis_cache.get(index, {}).get(
+    def effective_category(index):
+        return cache.get(index, {}).get(
             "category",
-            record.get("category", "UNKNOWN")
+            records[index]["category"]
         )
 
-    category_counts = Counter(
-        effective_category(index, record)
-        for index, record in enumerate(records)
+    counts = Counter(
+        effective_category(index)
+        for index in range(len(records))
     )
 
-    st.title("🛠️ AI Engineering Assistant")
+    st.title(
+        "🛠️ AI Engineering Assistant"
+    )
 
     st.caption(
-        "Local Log Analysis | Llama 3.2 | "
-        "RAG | Evidence-Aware AI"
+        "Log Analysis | Llama 3.2 | "
+        "RAG | Evidence Tracking"
     )
+
+    if data_source == "Demo Data":
+        st.info(
+            "Using synthetic demo logs."
+        )
+    else:
+        st.success(
+            f"Loaded file: {filename}"
+        )
 
     st.divider()
 
     overview = st.columns(2)
 
     overview[0].metric(
-        "Total Log Events", total_events
+        "Total Log Events",
+        len(events)
     )
 
     overview[1].metric(
-        "Detected Errors", len(records)
+        "Detected Errors",
+        len(records)
     )
 
-    st.markdown("#### Error Categories")
+    st.divider()
+
+    # New parser quality section
+    display_parser_health(parsed)
+
+    st.divider()
+
+    if not events:
+        st.error(
+            "No supported log events found."
+        )
+        st.stop()
+
+    st.subheader("Error Categories")
 
     categories = [
         "DATABASE",
         "NETWORK",
         "STORAGE",
         "MEMORY",
-        "TIMEOUT"
+        "TIMEOUT",
+        "UNKNOWN"
     ]
 
-    metric_columns = st.columns(5)
+    columns = st.columns(6)
 
     for column, category in zip(
-        metric_columns, categories
+        columns, categories
     ):
         column.metric(
             category.title(),
-            category_counts.get(category, 0)
-        )
-
-    if category_counts.get("UNKNOWN", 0):
-        st.caption(
-            f"Unknown errors: "
-            f"{category_counts['UNKNOWN']}"
+            counts.get(category, 0)
         )
 
     st.divider()
 
     if not records:
         st.info(
-            "No ERROR, CRITICAL or FATAL events detected."
+            "No ERROR, CRITICAL or FATAL events found."
         )
         return
 
-    show_log_explorer(
-        records,
-        analysis_cache
-    )
+    with st.expander("Log Explorer"):
+        rows = []
+
+        for index, record in enumerate(records):
+            rows.append({
+                "ID": index + 1,
+                "Time": record["time"],
+                "Level": record["level"],
+                "Category": effective_category(index),
+                "Message": record["message"]
+            })
+
+        st.dataframe(
+            rows,
+            use_container_width=True,
+            hide_index=True
+        )
 
     st.subheader("Select an Error")
 
@@ -491,28 +488,24 @@ def main():
         "Error Event",
         options=list(range(len(records))),
         format_func=lambda index: (
-            f"[{effective_category(index, records[index])}] "
-            f"{records[index].get('message', '')[:110]}"
+            f"[{effective_category(index)}] "
+            f"{records[index]['message'][:110]}"
         )
     )
 
     record = records[selected_index]
+    result = cache.get(selected_index)
 
-    fresh_result = analysis_cache.get(
+    category = effective_category(
         selected_index
     )
 
-    displayed_category = effective_category(
-        selected_index,
-        record
-    )
-
-    displayed_source = (
-        fresh_result.get("classification_source", "AI")
-        if fresh_result is not None
-        else record.get(
-            "classification_source", "SAVED"
+    classification_source = (
+        result.get(
+            "classification_source", "AI"
         )
+        if result is not None
+        else record["classification_source"]
     )
 
     st.markdown(
@@ -520,32 +513,32 @@ def main():
     )
 
     st.caption(
-        f"Category: {displayed_category} | "
-        f"Classification: {displayed_source}"
+        f"Category: {category} | "
+        f"Classification: {classification_source}"
     )
 
-    with st.expander("Raw Error / Stack Trace"):
+    with st.expander(
+        "Raw Error / Stack Trace"
+    ):
         st.code(
-            build_full_error(record),
+            full_error_text(record),
             language="text"
         )
 
     st.divider()
 
-    run_analysis = st.button(
+    if st.button(
         "🤖 Analyze Selected Error",
         type="primary"
-    )
-
-    if run_analysis:
-        success = False
-
-        with st.spinner("Running local AI analysis..."):
+    ):
+        with st.spinner(
+            "Running local AI analysis..."
+        ):
             try:
-                result = analyze_selected_record(record)
+                new_result = run_analysis(record)
 
-                analysis_cache[selected_index] = result
-                success = True
+                cache[selected_index] = new_result
+                st.rerun()
 
             except Exception as error:
                 st.error(
@@ -553,12 +546,7 @@ def main():
                     f"{type(error).__name__}: {error}"
                 )
 
-        if success:
-            st.rerun()
-
-    result = analysis_cache.get(
-        selected_index
-    )
+    result = cache.get(selected_index)
 
     if result is not None:
         st.caption("Fresh AI analysis")
@@ -566,14 +554,17 @@ def main():
     elif data_source == "Demo Data":
         result = next(
             (
-                item for item in saved_results
-                if item.get("error") == record["message"]
+                saved for saved in saved_results
+                if saved.get("error")
+                == record["message"]
             ),
             None
         )
 
         if result is not None:
-            st.caption("Previously saved analysis")
+            st.caption(
+                "Previously saved analysis"
+            )
 
     if result is None:
         st.info(
@@ -584,7 +575,7 @@ def main():
 
     st.divider()
 
-    show_analysis(result)
+    display_analysis(result)
 
     st.divider()
 
@@ -592,16 +583,16 @@ def main():
         "Download Analysis JSON",
         data=json.dumps(
             result,
-            indent=4,
-            ensure_ascii=False
+            ensure_ascii=False,
+            indent=4
         ),
         file_name="ai_analysis.json",
         mime="application/json"
     )
 
     st.caption(
-        "Local prototype with synthetic test data. "
-        "Uploaded logs are processed in memory. "
+        "Local prototype. Synthetic test data and "
+        "sample documentation are used. "
         "AI results require verification."
     )
 
