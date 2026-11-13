@@ -168,3 +168,16 @@ Local knowledge-base documents contain general sample troubleshooting guidance. 
 ## Project Status
 
 Local portfolio prototype. Core dashboard, error classification, documentation retrieval, event investigation, and initial evaluation are implemented.
+
+
+
+## Screenshots
+
+### Dashboard Overview
+![Dashboard Overview](screenshots/01-dashboard-overview.png)
+
+### Event Investigation
+![Event Investigation](screenshots/02-event-investigation.png)
+
+### Evidence-Aware AI Analysis
+![Evidence-Aware Analysis](screenshots/03-evidence-aware-analysis.png)
