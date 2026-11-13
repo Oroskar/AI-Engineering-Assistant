@@ -71,8 +71,8 @@ Error counts and event ordering are calculated directly from the parsed data rat
 ### 1. Clone the repository
 
 ```bash
-git clone <repository-url>
-cd aiEngineeringAssistant
+ggit clone https://github.com/Oroskar/AI-Engineering-Assistant.git
+cd AI-Engineering-Assistant
 ```
 
 ### 2. Create a virtual environment
