@@ -9,7 +9,9 @@ import streamlit as st
 
 from ai_classifier import classify_with_ai
 from evidence_aware import analyze_error
+from event_queries import answer_event_question
 from log_parser import ERROR_LEVELS, parse_log_text_with_stats
+from session_agent import run_session_agent
 
 
 BASE_DIR = Path(__file__).parent
@@ -27,7 +29,6 @@ VALID_CATEGORIES = {
     "STORAGE",
     "UNKNOWN"
 }
-
 
 st.set_page_config(
     page_title="AI Engineering Assistant",
@@ -53,20 +54,27 @@ def classify_with_rules(text):
     text = text.lower()
 
     if any(term in text for term in (
-        "no space left", "disk full",
-        "insufficient disk space", "filesystem full",
-        "file system is full", "enospc"
+        "no space left",
+        "disk full",
+        "insufficient disk space",
+        "filesystem full",
+        "file system is full",
+        "enospc"
     )):
         return "STORAGE"
 
     if any(term in text for term in (
-        "out of memory", "memoryerror", "cuda",
+        "out of memory",
+        "memoryerror",
+        "cuda",
         "memory allocation failed"
     )):
         return "MEMORY"
 
     if any(term in text for term in (
-        "timeout", "timed out", "deadline exceeded"
+        "timeout",
+        "timed out",
+        "deadline exceeded"
     )):
         return "TIMEOUT"
 
@@ -78,10 +86,13 @@ def classify_with_rules(text):
         return "DATABASE"
 
     if any(term in text for term in (
-        "dns", "unable to resolve hostname",
+        "dns",
+        "unable to resolve hostname",
         "name or service not known",
-        "hostname not found", "network unreachable",
-        "connection refused", "connection reset"
+        "hostname not found",
+        "network unreachable",
+        "connection refused",
+        "connection reset"
     )):
         return "NETWORK"
 
@@ -160,6 +171,8 @@ def run_analysis(record):
 
 
 def display_parser_health(parsed):
+    st.subheader("Parsing Quality")
+
     malformed = parsed.get(
         "malformed_header_lines", 0
     )
@@ -167,8 +180,6 @@ def display_parser_health(parsed):
     ignored = parsed.get(
         "ignored_prefix_lines", 0
     )
-
-    st.subheader("Parsing Quality")
 
     columns = st.columns(3)
 
@@ -187,39 +198,29 @@ def display_parser_health(parsed):
         ignored
     )
 
-    if malformed > 0:
+    if malformed:
         st.warning(
-            f"Parsing warning: {malformed} malformed "
-            "log header(s) were skipped. "
-            "The analysis may be incomplete."
+            f"{malformed} malformed header(s) were "
+            "skipped. Analysis may be incomplete."
         )
 
-    if ignored > 0:
+    if ignored:
         st.warning(
-            f"{ignored} line(s) before the first valid "
-            "log event were ignored. This count can "
-            "include malformed headers."
+            f"{ignored} prefix line(s) were ignored. "
+            "This count may overlap with malformed headers."
         )
 
-    if malformed == 0 and ignored == 0:
+    if not malformed and not ignored:
         st.success(
             "No malformed timestamp-like headers or "
-            "ignored prefix lines were detected."
+            "ignored prefix lines detected."
         )
 
-    with st.expander("About parsing quality"):
-        st.markdown(
-            "The parser recognizes supported timestamp "
-            "and log-level formats. Invalid timestamps "
-            "and malformed timestamp-like headers are "
-            "skipped rather than analyzed as errors."
-        )
-
+    with st.expander("About Parsing Quality"):
         st.caption(
-            "This does not guarantee that every line "
-            "was understood correctly. Unrecognized "
-            "continuation lines may still be attached "
-            "to the previous event."
+            "The parser supports defined timestamp and "
+            "log-level formats. Unrecognized continuation "
+            "lines may still be attached to an earlier event."
         )
 
 
@@ -235,9 +236,7 @@ def display_analysis(result):
     left, right = st.columns(2, gap="large")
 
     with left:
-        st.subheader(
-            "Documented Recommendations"
-        )
+        st.subheader("Documented Recommendations")
 
         source = documentation.get("source")
 
@@ -299,10 +298,155 @@ def display_analysis(result):
             )
 
 
-def main():
-    st.sidebar.title(
-        "AI Engineering Assistant"
+def prepare_session_records(records, analysis_cache):
+    session_records = []
+
+    for index, record in enumerate(records):
+        updated = dict(record)
+
+        analysis = analysis_cache.get(index)
+
+        if analysis is not None:
+            updated["category"] = analysis.get(
+                "category",
+                record["category"]
+            )
+
+            updated["classification_source"] = (
+                analysis.get(
+                    "classification_source",
+                    record["classification_source"]
+                )
+            )
+
+        session_records.append(updated)
+
+    return session_records
+
+
+def is_event_question(question):
+    """
+    Route supported event questions to deterministic
+    Python logic instead of the LLM session agent.
+    """
+    text = question.lower()
+
+    if re.search(
+        r"\b(stack\s*traces?|stacktraces?|tracebacks?)\b",
+        text
+    ):
+        return True
+
+    if re.search(r"\bbefore\b", text):
+        return True
+
+    has_position = bool(
+        re.search(
+            r"\b(first|earliest|last|latest)\b",
+            text
+        )
     )
+
+    mentions_error = bool(
+        re.search(r"\berrors?\b", text)
+    )
+
+    return has_position and mentions_error
+
+
+def route_chat_question(question, records, events):
+    """
+    Event questions: deterministic Python.
+    Summary and troubleshooting: session AI agent.
+    """
+    if is_event_question(question):
+        return answer_event_question(
+            question,
+            events
+        )
+
+    return run_session_agent(
+        question,
+        records
+    )
+
+
+def display_log_chat(records, events, analysis_cache):
+    st.subheader("💬 Ask Your Logs")
+
+    st.caption(
+        "Ask questions about the currently loaded log file. "
+        "Event investigation uses original log events. "
+        "Summary questions use the session agent."
+    )
+
+    with st.expander("Example Questions"):
+        st.markdown(
+            "- How many errors are in this file?\n"
+            "- What is the most common error category?\n"
+            "- How should I investigate the most common errors?\n"
+            "- Which error happened first?\n"
+            "- Which errors have stack traces?\n"
+            "- What happened before the PostgreSQL failure?"
+        )
+
+    history = st.session_state["chat_history"]
+
+    for message in history:
+        with st.chat_message(message["role"]):
+            st.text(message["content"])
+
+    question = st.chat_input(
+        "Ask a question about your logs...",
+        key="log_chat_input"
+    )
+
+    if question:
+        history.append({
+            "role": "user",
+            "content": question
+        })
+
+        with st.chat_message("user"):
+            st.write(question)
+
+        session_records = prepare_session_records(
+            records,
+            analysis_cache
+        )
+
+        with st.chat_message("assistant"):
+            with st.spinner("Investigating logs..."):
+                try:
+                    answer = route_chat_question(
+                        question,
+                        session_records,
+                        events
+                    )
+
+                except Exception as error:
+                    answer = (
+                        "Unable to answer this question. "
+                        f"{type(error).__name__}: {error}"
+                    )
+
+            st.text(answer)
+
+        history.append({
+            "role": "assistant",
+            "content": answer
+        })
+
+    if history and st.button(
+        "Clear Chat History",
+        key="clear_log_chat"
+    ):
+        st.session_state["chat_history"] = []
+        st.rerun()
+
+
+def main():
+    st.sidebar.title("AI Engineering Assistant")
 
     data_source = st.sidebar.radio(
         "Data Source",
@@ -335,10 +479,8 @@ def main():
 
         if uploaded_file is None:
             st.title("Upload Logs")
-
             st.info(
-                "Choose a .log or .txt file "
-                "in the sidebar."
+                "Choose a .log or .txt file in the sidebar."
             )
             st.stop()
 
@@ -370,12 +512,11 @@ def main():
         + hashlib.sha256(file_bytes).hexdigest()
     )
 
-    if (
-        st.session_state.get("active_source")
-        != source_key
-    ):
+    # New file = new session.
+    if st.session_state.get("active_source") != source_key:
         st.session_state["active_source"] = source_key
         st.session_state["analysis_cache"] = {}
+        st.session_state["chat_history"] = []
 
     cache = st.session_state["analysis_cache"]
 
@@ -390,23 +531,17 @@ def main():
         for index in range(len(records))
     )
 
-    st.title(
-        "🛠️ AI Engineering Assistant"
-    )
+    st.title("🛠️ AI Engineering Assistant")
 
     st.caption(
-        "Log Analysis | Llama 3.2 | "
-        "RAG | Evidence Tracking"
+        "Log Analysis | Llama 3.2 | RAG | "
+        "Evidence Tracking | Event Investigation"
     )
 
     if data_source == "Demo Data":
-        st.info(
-            "Using synthetic demo logs."
-        )
+        st.info("Using synthetic demo logs.")
     else:
-        st.success(
-            f"Loaded file: {filename}"
-        )
+        st.success(f"Loaded file: {filename}")
 
     st.divider()
 
@@ -424,15 +559,12 @@ def main():
 
     st.divider()
 
-    # New parser quality section
     display_parser_health(parsed)
 
     st.divider()
 
     if not events:
-        st.error(
-            "No supported log events found."
-        )
+        st.error("No supported log events found.")
         st.stop()
 
     st.subheader("Error Categories")
@@ -463,6 +595,14 @@ def main():
             "No ERROR, CRITICAL or FATAL events found."
         )
         return
+
+    display_log_chat(
+        records,
+        events,
+        cache
+    )
+
+    st.divider()
 
     with st.expander("Log Explorer"):
         rows = []
@@ -501,9 +641,7 @@ def main():
     )
 
     classification_source = (
-        result.get(
-            "classification_source", "AI"
-        )
+        result.get("classification_source", "AI")
         if result is not None
         else record["classification_source"]
     )
@@ -517,9 +655,7 @@ def main():
         f"Classification: {classification_source}"
     )
 
-    with st.expander(
-        "Raw Error / Stack Trace"
-    ):
+    with st.expander("Raw Error / Stack Trace"):
         st.code(
             full_error_text(record),
             language="text"
@@ -531,9 +667,7 @@ def main():
         "🤖 Analyze Selected Error",
         type="primary"
     ):
-        with st.spinner(
-            "Running local AI analysis..."
-        ):
+        with st.spinner("Running local AI analysis..."):
             try:
                 new_result = run_analysis(record)
 
@@ -554,46 +688,44 @@ def main():
     elif data_source == "Demo Data":
         result = next(
             (
-                saved for saved in saved_results
-                if saved.get("error")
-                == record["message"]
+                saved
+                for saved in saved_results
+                if saved.get("error") == record["message"]
             ),
             None
         )
 
         if result is not None:
-            st.caption(
-                "Previously saved analysis"
-            )
+            st.caption("Previously saved analysis")
 
     if result is None:
         st.info(
             "Click Analyze Selected Error "
             "to generate recommendations."
         )
-        return
 
-    st.divider()
+    else:
+        st.divider()
 
-    display_analysis(result)
+        display_analysis(result)
 
-    st.divider()
+        st.divider()
 
-    st.download_button(
-        "Download Analysis JSON",
-        data=json.dumps(
-            result,
-            ensure_ascii=False,
-            indent=4
-        ),
-        file_name="ai_analysis.json",
-        mime="application/json"
-    )
+        st.download_button(
+            "Download Analysis JSON",
+            data=json.dumps(
+                result,
+                ensure_ascii=False,
+                indent=4
+            ),
+            file_name="ai_analysis.json",
+            mime="application/json"
+        )
 
     st.caption(
-        "Local prototype. Synthetic test data and "
-        "sample documentation are used. "
-        "AI results require verification."
+        "Local prototype using synthetic test data "
+        "and sample documentation. AI conclusions "
+        "require verification."
     )
 
 
